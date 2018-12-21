@@ -1,0 +1,72 @@
+from plyfile import (PlyData, PlyElement, make2d, PlyParseError, PlyProperty)
+import os
+import numpy as np
+
+def read_ply(ply_file):
+    with open(ply_file, 'rb') as read_file:
+        ply_data = PlyData.read(read_file)
+
+    points = []
+    try:
+        for x,y,z,_,_,_ in ply_data['vertex']:
+            points.append([x,y,z])
+    except:
+        for x,y,z,_,_,_,_ in ply_data['vertex']:
+            points.append([x,y,z])
+    points = np.array(points)
+    return points
+
+
+target_ply_folder = 'data/scannet_ply'
+target_instance = 'output/scannet_benchmark_nn'
+input_ply_folder = 'data/scannet_ply_sem'
+input_instance = 'output/scannet_benchmark'
+min_groupsize = 0
+
+os.makedirs(target_instance, exist_ok=True)
+os.makedirs(os.path.join(target_instance, 'predicted_masks'), exist_ok=True)
+for txt_file in os.listdir(input_instance):
+    print(txt_file)
+    if os.path.isdir(os.path.join(input_instance, txt_file)):
+        continue
+    writelines = []
+    instances = open(os.path.join(input_instance, txt_file)).readlines()
+
+    # read ply
+    sceneid = txt_file.split('.')[0]
+    input_points = read_ply(os.path.join(input_ply_folder, sceneid + '.ply'))
+    target_points = read_ply(os.path.join(target_ply_folder, sceneid, sceneid + '.ply'))
+
+    for instance in instances:
+        # parse instance
+        instance = instance.split()
+        ins_txt = os.path.basename(instance[0])
+        instance[0] = os.path.join('predicted_masks', ins_txt)
+
+        # read index
+        ply_one = np.loadtxt(os.path.join(input_instance, 'predicted_masks', ins_txt))
+        index = ply_one.nonzero()[0]
+        query_points = input_points[index]
+
+        # nn search
+        idxs = []
+        print("starting NN search")
+        for k in range(query_points.shape[0]):
+            tmp = np.linalg.norm(target_points - query_points[k], axis=1)
+            idx = np.where(tmp < 0.1)[0].astype(np.int32)
+            idxs.extend(idx)
+
+        # write to new instance index
+        write_points = np.zeros(target_points.shape[0])
+        write_points[idxs] = 1
+        num_points = write_points.nonzero()[0].shape[0]
+
+        # decide if write out
+        if num_points >= min_groupsize:
+            writelines.append(' '.join(instance) + '\n')
+            np.savetxt(os.path.join(target_instance, 'predicted_masks', ins_txt), write_points, fmt='%d')
+
+    f = open(os.path.join(target_instance, txt_file), 'w')
+    f.writelines(writelines)
+    f.close()
+        
